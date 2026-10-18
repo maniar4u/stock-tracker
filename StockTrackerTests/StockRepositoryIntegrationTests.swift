@@ -6,19 +6,19 @@
 //
 
 import StockSocketKit
-import StockTrackerDomain
 import SwiftData
 import XCTest
 
 @testable import StockTracker
 
-/// Test-only feed that drives terminal decode failure paths through ``DefaultStockRepository``.
+/// Test-only feed that drives terminal decode failure paths through the use case and repository.
 private actor ControlledFailureEchoFeed {
     enum FailureMode: Sendable {
         /// Yields a tick that fails ``DomainQuoteMapping`` (empty symbol).
         case invalidDomainQuote
         /// Yields a transport-level decode failure (same end state as bad payload after framing).
         case transportDecodingFailed
+        case serverNormalClose
     }
 
     private var streamContinuation: AsyncStream<WebSocketPublicEvent>.Continuation?
@@ -35,12 +35,16 @@ private actor ControlledFailureEchoFeed {
 
         switch failureMode {
         case .invalidDomainQuote:
-            continuation?.yield(
-                .decodedTick(EchoStockPayload(symbol: "", price: 1, previousClose: 1, emittedAtEpoch: 0))
-            )
+            for _ in 0..<EchoPriceFeed.maxConsecutiveInvalidBatches {
+                continuation?.yield(
+                    .decodedBatch([EchoStockPayload(symbol: "", price: 1, previousClose: 1, emittedAtEpoch: 0)])
+                )
+            }
 
         case .transportDecodingFailed:
             continuation?.yield(.transportFailure(.decodingFailed))
+        case .serverNormalClose:
+            continuation?.yield(.transportFailure(.closedByServer(code: 1000)))
         }
     }
 
@@ -70,6 +74,8 @@ extension ControlledFailureEchoFeed: StockEchoFeed {
     func stopTransport() async {
         runStopTransport()
     }
+
+    func requestReconnect() async {}
 
     func applyOutboundSuspension(_ suspended: Bool) async {
         _ = suspended
@@ -108,7 +114,6 @@ final class StockRepositoryIntegrationTests: XCTestCase {
         let schema = Schema([PersistedQuote.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let context = ModelContext(container)
 
         let epoch = Date().timeIntervalSince1970
         let payloads = [
@@ -117,8 +122,8 @@ final class StockRepositoryIntegrationTests: XCTestCase {
 
         let emitted = expectation(description: "FakeEchoFeed finished emitting payloads")
 
-        let repository = DefaultStockRepository(
-            modelContext: context,
+        let repository = FeedTestSystem(
+            modelContainer: container,
             catalogEntries: catalog,
             logging: BlackHoleLogging(),
             echoFeedBuilder: { _ in
@@ -128,14 +133,14 @@ final class StockRepositoryIntegrationTests: XCTestCase {
             },
         )
 
-        await repository.startFeed()
+        await repository.startFeed.execute()
         await fulfillment(of: [emitted], timeout: 2)
 
         try await waitUntilTrue {
             try await repository.hasPersistedQuotes()
         }
 
-        await repository.stopFeed()
+        await repository.stopFeed.execute()
 
         let stillHasQuotes = try await repository.hasPersistedQuotes()
         XCTAssertTrue(stillHasQuotes)
@@ -155,7 +160,6 @@ final class StockRepositoryIntegrationTests: XCTestCase {
         let schema = Schema([PersistedQuote.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let context = ModelContext(container)
 
         let epoch = Date().timeIntervalSince1970
         let payloads = [
@@ -165,8 +169,8 @@ final class StockRepositoryIntegrationTests: XCTestCase {
 
         let emitted = expectation(description: "FakeEchoFeed finished emitting payloads")
 
-        let repository = DefaultStockRepository(
-            modelContext: context,
+        let repository = FeedTestSystem(
+            modelContainer: container,
             catalogEntries: catalog,
             logging: BlackHoleLogging(),
             echoFeedBuilder: { _ in
@@ -176,7 +180,7 @@ final class StockRepositoryIntegrationTests: XCTestCase {
             },
         )
 
-        await repository.startFeed()
+        await repository.startFeed.execute()
         await fulfillment(of: [emitted], timeout: 2)
 
         try await waitUntilTrue {
@@ -184,7 +188,7 @@ final class StockRepositoryIntegrationTests: XCTestCase {
             return page.quotes.count == 2
         }
 
-        await repository.stopFeed()
+        await repository.stopFeed.execute()
 
         let firstPage = try await repository.persistedQuotesSnapshot(limit: 1, cursor: nil)
         XCTAssertEqual(firstPage.quotes.map(\.symbol), ["AAA"])
@@ -203,10 +207,9 @@ final class StockRepositoryIntegrationTests: XCTestCase {
         let schema = Schema([PersistedQuote.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let context = ModelContext(container)
 
-        let repository = DefaultStockRepository(
-            modelContext: context,
+        let repository = FeedTestSystem(
+            modelContainer: container,
             catalogEntries: catalog,
             logging: BlackHoleLogging(),
             echoFeedBuilder: { _ in
@@ -214,14 +217,14 @@ final class StockRepositoryIntegrationTests: XCTestCase {
             },
         )
 
-        await repository.startFeed()
+        await repository.startFeed.execute()
 
         try await waitUntilTrue {
-            repository.currentFeedConnectionState == .failed(reason: .decodingFailed)
+            repository.status.currentConnectionState == .failed(reason: .decodingFailed)
         }
 
-        XCTAssertEqual(repository.currentFeedConnectionState, .failed(reason: .decodingFailed))
-        await repository.stopFeed()
+        XCTAssertEqual(repository.status.currentConnectionState, .failed(reason: .decodingFailed))
+        await repository.stopFeed.execute()
     }
 
     func testTransportDecodingFailureMapsToDecodingFailedState() async throws {
@@ -232,10 +235,9 @@ final class StockRepositoryIntegrationTests: XCTestCase {
         let schema = Schema([PersistedQuote.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let context = ModelContext(container)
 
-        let repository = DefaultStockRepository(
-            modelContext: context,
+        let repository = FeedTestSystem(
+            modelContainer: container,
             catalogEntries: catalog,
             logging: BlackHoleLogging(),
             echoFeedBuilder: { _ in
@@ -243,13 +245,13 @@ final class StockRepositoryIntegrationTests: XCTestCase {
             },
         )
 
-        await repository.startFeed()
+        await repository.startFeed.execute()
 
         try await waitUntilTrue {
-            repository.currentFeedConnectionState == .failed(reason: .decodingFailed)
+            repository.status.currentConnectionState == .failed(reason: .decodingFailed)
         }
 
-        XCTAssertEqual(repository.currentFeedConnectionState, .failed(reason: .decodingFailed))
-        await repository.stopFeed()
+        XCTAssertEqual(repository.status.currentConnectionState, .failed(reason: .decodingFailed))
+        await repository.stopFeed.execute()
     }
 }
