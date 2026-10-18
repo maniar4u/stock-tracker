@@ -1,13 +1,13 @@
 //
-//  StockTrackerDomainTests.swift
-//  StockTrackerDomain
+//  FeedConnectionState.swift
+//  StockTracker
 //
 //  Created by Muhammad Ali Maniar on 02/05/2026.
 //
 
 import Foundation
 
-public enum FeedConnectionState: Equatable, Sendable {
+nonisolated enum FeedConnectionState: Equatable, Sendable {
     case idle
     case connecting
     case connected
@@ -16,7 +16,7 @@ public enum FeedConnectionState: Equatable, Sendable {
     case failed(reason: FeedFailure)
 }
 
-public enum FeedFailure: Equatable, Sendable {
+nonisolated enum FeedFailure: Equatable, Sendable {
     case transportUnavailable
     case decodingFailed
     case closedByServer
