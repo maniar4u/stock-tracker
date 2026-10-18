@@ -141,3 +141,7 @@ Pods/
 /fastlane/fastlane/Appfile
 /Gemfile.lock
 /enterprise/register/Gemfile.lock
+
+# Python bytecode
+__pycache__/
+*.pyc

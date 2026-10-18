@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
 
 permissions:
   contents: read
@@ -12,33 +15,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    runs-on: macos-26
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - name: SwiftLint
-        run: |
-          brew install swiftlint
-          swiftlint lint --strict --config .swiftlint.yml
-
-  test-packages:
+  host:
+    if: github.event_name != 'schedule'
     runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: StockTrackerDomain
-        run: swift test --package-path StockTrackerDomain
-      - name: StockSocketKit
-        run: swift test --package-path StockSocketKit
+      - name: Toolchain
+        run: |
+          mkdir -p TestResults
+          xcodebuild -version | tee TestResults/toolchain.log
+          swift --version | tee -a TestResults/toolchain.log
+      - name: SwiftLint
+        run: |
+          set -euo pipefail
+          command -v swiftlint >/dev/null || brew install swiftlint
+          swiftlint lint --strict --config .swiftlint.yml 2>&1 | tee TestResults/swiftlint.log
+      - name: CI helper tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s Scripts/tests 2>&1 | tee TestResults/ci-helpers.log
+      - name: App logic on macOS (same sources and tests as Xcode)
+        run: |
+          set -euo pipefail
+          swift test 2>&1 | tee TestResults/app-logic.log
+      - name: Socket package
+        run: |
+          set -euo pipefail
+          swift test --package-path StockSocketKit 2>&1 | tee TestResults/socket.log
+      - name: Upload host logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-results
+          path: TestResults
+          if-no-files-found: warn
 
-  test-app:
+  ios:
+    if: github.event_name != 'schedule'
     runs-on: macos-26
     timeout-minutes: 60
-    env:
-      XCODE_DESTINATION: platform=iOS Simulator,name=iPhone 17
     steps:
       - uses: actions/checkout@v4
+      - name: Select available iPhone simulator
+        run: |
+          set -euo pipefail
+          mkdir -p TestResults
+          xcodebuild -version | tee TestResults/toolchain.log
+          xcrun simctl list --json > TestResults/simulators.json
+          simulator_id=$(python3 Scripts/select_ios_simulator.py)
+          echo "XCODE_DESTINATION=platform=iOS Simulator,id=${simulator_id}" >> "$GITHUB_ENV"
+          echo "Selected ${simulator_id}" | tee TestResults/destination.log
       - name: Xcode tests
         run: |
           set -euo pipefail
@@ -47,4 +74,25 @@ jobs:
             -scheme StockTracker \
             -sdk iphonesimulator \
             -destination "${XCODE_DESTINATION}" \
-            -quiet
+            -parallel-testing-enabled NO \
+            -resultBundlePath TestResults/App.xcresult \
+            2>&1 | tee TestResults/xcodebuild.log
+      - name: Upload iOS results and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: TestResults
+          if-no-files-found: warn
+
+  # Hits the real Postman echo server, so it is a daily/manual canary and never gates a pull request.
+  live-smoke:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Live echo round trip
+        run: |
+          set -euo pipefail
+          STOCKSOCKET_LIVE_TESTS=1 swift test --package-path StockSocketKit --filter LiveEchoSmokeTests

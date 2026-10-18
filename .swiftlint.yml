@@ -21,5 +21,4 @@ file_length:
 excluded:
   - .build
   - "**/.build"
-  - StockTrackerDomain/.build
   - StockSocketKit/.build
