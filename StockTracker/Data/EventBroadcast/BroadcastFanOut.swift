@@ -10,55 +10,50 @@ import Synchronization
 
 /// Thread-safe multi-subscriber fan-out. Methods are `nonisolated` so teardown can call `finishAll()` from `deinit`
 /// while the app target uses `default actor isolation = MainActor`.
+/// Registrations live inside a `Mutex`, so the type is checked `Sendable` with no unsafe escape hatch.
+/// Continuations are yielded/finished after the lock is released because termination callbacks take the same lock.
+/// A subscriber whose buffer is full loses the newest element; each loss is counted in `droppedCount`.
 final class BroadcastFanOut<Element: Sendable>: Sendable {
-    private struct Registration {
-        let id: UUID
-        let continuation: AsyncStream<Element>.Continuation
+    private let registrations = Mutex<[UUID: AsyncStream<Element>.Continuation]>([:])
+    private let dropped = Atomic<Int>(0)
+
+    nonisolated var droppedCount: Int {
+        dropped.load(ordering: .relaxed)
     }
 
-    private struct LockedState {
-        var registrations: [UUID: Registration] = [:]
+    nonisolated var subscriberCount: Int {
+        registrations.withLock { $0.count }
     }
-
-    private let mutex = Mutex(LockedState())
 
     nonisolated func makeStream(
         bufferingPolicy: AsyncStream<Element>.Continuation.BufferingPolicy = .bufferingOldest(64)
     ) -> AsyncStream<Element> {
         AsyncStream(bufferingPolicy: bufferingPolicy) { continuation in
             let id = UUID()
-            let registration = Registration(id: id, continuation: continuation)
-            mutex.withLock { state in
-                state.registrations[id] = registration
-            }
-
+            registrations.withLock { $0[id] = continuation }
             continuation.onTermination = { @Sendable [self] _ in
-                self.mutex.withLock { state in
-                    _ = state.registrations.removeValue(forKey: id)
-                }
+                registrations.withLock { _ = $0.removeValue(forKey: id) }
             }
         }
     }
 
     nonisolated func yield(_ element: Element) {
-        let snapshots = mutex.withLock { state -> [Registration] in
-            Array(state.registrations.values)
-        }
-
-        for registration in snapshots {
-            registration.continuation.yield(element)
+        let snapshot = registrations.withLock { Array($0.values) }
+        for continuation in snapshot {
+            if case .dropped = continuation.yield(element) {
+                dropped.add(1, ordering: .relaxed)
+            }
         }
     }
 
     nonisolated func finishAll() {
-        let snapshots = mutex.withLock { state -> [Registration] in
-            let copied = Array(state.registrations.values)
-            state.registrations.removeAll()
+        let snapshot = registrations.withLock { registrations -> [AsyncStream<Element>.Continuation] in
+            let copied = Array(registrations.values)
+            registrations.removeAll()
             return copied
         }
-
-        for registration in snapshots {
-            registration.continuation.finish()
+        for continuation in snapshot {
+            continuation.finish()
         }
     }
 }

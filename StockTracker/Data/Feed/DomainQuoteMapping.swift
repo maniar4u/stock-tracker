@@ -7,7 +7,6 @@
 
 import Foundation
 import StockSocketKit
-import StockTrackerDomain
 
 enum DomainQuoteMapping {
     nonisolated static func quote(from payload: EchoStockPayload) -> StockQuote? {

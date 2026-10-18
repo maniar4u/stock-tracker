@@ -7,7 +7,6 @@
 
 import Foundation
 import StockSocketKit
-import StockTrackerDomain
 
 /// Centralizes transport tuning and the feed WebSocket endpoint (from Info.plist / xcconfig at build time).
 enum FeedTransportConfiguration {
@@ -38,16 +37,5 @@ enum FeedTransportConfiguration {
         }
 
         return URL(string: "\(scheme)://\(hostAndPath)")
-    }
-
-    nonisolated static let outboundPulseIntervalNanoseconds: UInt64 = 450_000_000
-
-    nonisolated static var defaultBackoffPolicy: ExponentialBackoffPolicy {
-        ExponentialBackoffPolicy(
-            initialNanoseconds: 250_000_000,
-            multiplier: 1.75,
-            maxNanoseconds: 8_000_000_000,
-            jitterRatio: 0.2
-        )
     }
 }

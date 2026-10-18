@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import StockTrackerDomain
 
 private enum CatalogLoadingError: Error {
     case missingResource

@@ -7,7 +7,6 @@
 
 import Foundation
 import StockSocketKit
-import StockTrackerDomain
 
 struct LoggingEchoBridge: EchoLogger {
     private let logging: Logging

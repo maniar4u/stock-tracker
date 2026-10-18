@@ -7,23 +7,24 @@
 
 import Foundation
 import StockSocketKit
-import StockTrackerDomain
 import SwiftData
 
 enum ApplicationBootstrap {
     enum Phase {
         case failed(MessagePresentation)
-        case ready(repository: any StockRepositoryProtocol, container: ModelContainer)
+        case ready(AppDependencies, container: ModelContainer)
     }
 
-    static func make(logger: Logging = OSLogStockLogger()) -> Phase {
+    static func make(logger: Logging = OSLogStockLogger(), environment: AppEnvironment = .forCurrentLaunch()) -> Phase {
         guard let socketURL = FeedTransportConfiguration.makeDefaultSocketURL() else {
             return .failed(MessagePresentation.feedTransportFailure)
         }
 
+        let tuning = FeedTransportTuning.load(bundle: .main)
+
         let catalogEntries: [StockCatalogEntry]
         do {
-            catalogEntries = try CatalogLoading.load(bundle: .main, logger: logger)
+            catalogEntries = environment.transformCatalog(try CatalogLoading.load(bundle: .main, logger: logger))
         } catch {
             return .failed(MessagePresentation.catalogFailure)
         }
@@ -32,29 +33,48 @@ enum ApplicationBootstrap {
 
         let container: ModelContainer
         do {
-            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: environment.storesInMemory)
             container = try ModelContainer(for: schema, configurations: [configuration])
         } catch {
             logger.log(.error, "Model container bootstrap failed \(error.localizedDescription)")
             return .failed(MessagePresentation.persistenceFailure)
         }
 
-        let context = ModelContext(container)
         let repository = DefaultStockRepository(
-            modelContext: context,
+            modelContainer: container,
             catalogEntries: catalogEntries,
-            logging: logger,
-            echoFeedBuilder: { symbols in
-                return EchoWebSocketSession(
-                    url: socketURL,
-                    symbols: symbols,
-                    outboundIntervalNanoseconds: FeedTransportConfiguration.outboundPulseIntervalNanoseconds,
-                    backoffPolicy: FeedTransportConfiguration.defaultBackoffPolicy,
-                    logger: LoggingEchoBridge(logging: logger)
-                )
+            logging: logger
+        )
+        let coordinator = FeedSessionCoordinator(repository: repository,
+            feedBuilder: { symbols in
+                let transport: any StockEchoFeed
+                if let override = environment.feedOverride {
+                    transport = override(symbols)
+                } else {
+                    transport = EchoWebSocketSession(
+                        url: socketURL,
+                        symbols: symbols,
+                        outboundIntervalNanoseconds: tuning.outboundIntervalNanoseconds,
+                        backoffPolicy: tuning.backoffPolicy,
+                        logger: LoggingEchoBridge(logging: logger),
+                        handshakeTimeoutNanoseconds: tuning.handshakeTimeoutNanoseconds,
+                        healthPolicy: tuning.healthPolicy
+                    )
+                }
+                return EchoPriceFeed(transport: transport, logging: logger)
             }
         )
 
-        return .ready(repository: repository, container: container)
+        let dependencies = AppDependencies(
+            repository: repository,
+            feedStatus: coordinator,
+            startFeed: DefaultStartFeedUseCase(session: coordinator, status: coordinator, repository: repository),
+            stopFeed: DefaultStopFeedUseCase(session: coordinator),
+            retryFeed: DefaultRetryFeedUseCase(session: coordinator, repository: repository),
+            applySceneActivity: DefaultApplySceneActivityUseCase(session: coordinator),
+            handleNetworkPathChange: DefaultHandleNetworkPathChangeUseCase(session: coordinator, status: coordinator),
+            networkObserver: FeedNetworkObserver(updates: NetworkPathMonitor.updates)
+        )
+        return .ready(dependencies, container: container)
     }
 }

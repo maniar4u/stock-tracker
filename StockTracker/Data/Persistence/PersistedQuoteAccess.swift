@@ -6,12 +6,10 @@
 //
 
 import Foundation
-import StockTrackerDomain
 import SwiftData
 
 /// SwiftData read helpers for persisted quote rows.
-@MainActor
-enum PersistedQuoteAccess {
+nonisolated enum PersistedQuoteAccess {
     static func quotesPage(context: ModelContext, limit: Int, cursor: String?) throws -> QuotesPage {
         guard limit > 0 else {
             return QuotesPage(quotes: [], nextCursor: nil)

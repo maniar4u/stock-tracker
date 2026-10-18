@@ -7,7 +7,6 @@
 
 import Foundation
 import os
-import StockTrackerDomain
 
 struct OSLogStockLogger: Logging {
     private let logger = Logger(subsystem: "com.maniar.StockTracker", category: "app")

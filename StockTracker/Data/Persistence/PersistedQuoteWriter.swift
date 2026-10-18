@@ -6,17 +6,14 @@
 //
 
 import Foundation
-import StockTrackerDomain
 import SwiftData
 
-enum PersistedQuoteWriter {
-    @MainActor
+nonisolated enum PersistedQuoteWriter {
     static func upsert(quote: StockQuote, context: ModelContext) throws {
         try applyUpsert(quote: quote, context: context)
         try context.save()
     }
 
-    @MainActor
     static func upsertBatch(quotes: [StockQuote], context: ModelContext) throws {
         guard quotes.isEmpty == false else {
             return
@@ -27,7 +24,6 @@ enum PersistedQuoteWriter {
         try context.save()
     }
 
-    @MainActor
     private static func applyUpsert(quote: StockQuote, context: ModelContext) throws {
         let symbol = quote.symbol
         let predicate = #Predicate<PersistedQuote> { persisted in
