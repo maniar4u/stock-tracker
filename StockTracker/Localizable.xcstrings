@@ -1,6 +1,102 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "a11y.feed_start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start streaming stock prices"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بدء بث أسعار الأسهم"
+          }
+        }
+      }
+    },
+    "a11y.feed_stop" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop streaming stock prices"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إيقاف بث أسعار الأسهم"
+          }
+        }
+      }
+    },
+    "a11y.sort_menu" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sort stock list"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ترتيب قائمة الأسهم"
+          }
+        }
+      }
+    },
+    "a11y.stock_row.hint" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows company detail"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "عرض تفاصيل الشركة"
+          }
+        }
+      }
+    },
+    "a11y.stock_row.label" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, ticker %2$@. Last price %3$@. %4$@"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@، الرمز %2$@. آخر سعر %3$@. %4$@"
+          }
+        }
+      }
+    },
+    "a11y.theme_toggle" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toggle light or dark appearance"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التبديل بين المظهر الفاتح والداكن"
+          }
+        }
+      }
+    },
     "app.title" : {
       "localizations" : {
         "en" : {
@@ -8,16 +104,27 @@
             "state" : "translated",
             "value" : "Stocks App"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تطبيق الأسهم"
+          }
         }
       }
     },
-    "common.placeholder" : {
-      "extractionState" : "stale",
+    "banner.persistence" : {
       "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذر حفظ الأسعار على هذا الجهاز. ما زالت الأسعار المباشرة تتحدث."
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "--"
+            "value" : "Can’t save prices on this device. Live prices keep updating."
           }
         }
       }
@@ -29,6 +136,12 @@
             "state" : "translated",
             "value" : "Connected"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متصل"
+          }
         }
       }
     },
@@ -38,6 +151,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Connecting"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جارٍ الاتصال"
           }
         }
       }
@@ -49,6 +168,12 @@
             "state" : "translated",
             "value" : "Failed"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "فشل الاتصال"
+          }
         }
       }
     },
@@ -58,6 +183,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Idle"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "غير متصل"
           }
         }
       }
@@ -69,6 +200,12 @@
             "state" : "translated",
             "value" : "Reconnecting"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جارٍ إعادة الاتصال"
+          }
         }
       }
     },
@@ -79,27 +216,43 @@
             "state" : "translated",
             "value" : "Stopped"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "متوقف"
+          }
         }
       }
     },
     "detail.day_change" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Day change"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التغير اليومي"
+          }
         }
       }
     },
     "detail.day_change_pct" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Day change %"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "نسبة التغير اليومي"
           }
         }
       }
@@ -111,6 +264,12 @@
             "state" : "translated",
             "value" : "Key figures"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "المؤشرات الرئيسية"
+          }
         }
       }
     },
@@ -120,6 +279,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Last price"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "آخر سعر"
+          }
+        }
+      }
+    },
+    "detail.loading" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "جارٍ التحميل"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading"
           }
         }
       }
@@ -131,126 +312,187 @@
             "state" : "translated",
             "value" : "Today’s movement"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تغيرات اليوم"
+          }
         }
       }
     },
     "detail.previous_close" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Previous close"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الإغلاق السابق"
+          }
         }
       }
     },
     "message.cancelled_failure.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Streaming stopped before completing."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "توقف البث قبل اكتماله."
+          }
         }
       }
     },
     "message.cancelled_failure.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Feed cancelled"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أُلغي البث"
+          }
         }
       }
     },
     "message.catalog_failure.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Symbol catalog resources failed to load."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذر تحميل بيانات رموز الأسهم."
+          }
         }
       }
     },
     "message.catalog_failure.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Catalog unavailable"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "قائمة الأسهم غير متاحة"
+          }
         }
       }
     },
     "message.closed_failure.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "The socket closed unexpectedly while reconnecting."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أُغلق الاتصال بشكل غير متوقع أثناء إعادة الاتصال."
+          }
         }
       }
     },
     "message.closed_failure.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Feed interrupted"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "انقطع البث"
+          }
         }
       }
     },
     "message.decode_failure.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "The stream returned data this build couldn’t decode."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "أرسل البث بيانات يتعذر على هذا الإصدار قراءتها."
+          }
         }
       }
     },
     "message.decode_failure.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Unexpected payload"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "بيانات غير متوقعة"
+          }
         }
       }
     },
     "message.persistence_failure.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quotes could not be saved locally."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذر حفظ الأسعار على الجهاز."
+          }
         }
       }
     },
     "message.persistence_failure.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Storage unavailable"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "التخزين غير متاح"
           }
         }
       }
@@ -262,49 +504,75 @@
             "state" : "translated",
             "value" : "Retry"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "إعادة المحاولة"
+          }
         }
       }
     },
     "message.socket_failure.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Check connectivity and retry connecting."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تحقق من اتصال الإنترنت ثم أعد المحاولة."
+          }
         }
       }
     },
     "message.socket_failure.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Can’t reach the feed"
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذر الاتصال بالبث"
+          }
         }
       }
     },
     "message.start_socket.body" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tap play to connect and stream echoed price updates."
           }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "اضغط على زر التشغيل للاتصال وبث تحديثات الأسعار التجريبية."
+          }
         }
       }
     },
     "message.start_socket.title" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Start the live feed"
+          }
+        },
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ابدأ البث المباشر"
           }
         }
       }
@@ -312,6 +580,12 @@
     "placeholder.movement" : {
       "localizations" : {
         "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "--"
+          }
+        },
+        "ar" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "--"
@@ -326,109 +600,107 @@
             "state" : "translated",
             "value" : "--"
           }
-        }
-      }
-    },
-    "sort.change.asc" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
+        },
+        "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Day Change • Low to High"
+            "value" : "--"
           }
         }
       }
     },
-    "sort.change.desc" : {
-      "extractionState" : "stale",
+    "sort.direction.ascending" : {
       "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "من الأقل إلى الأعلى"
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Day Change • High to Low"
+            "value" : "Low to High"
           }
         }
       }
     },
-    "sort.price.asc" : {
-      "extractionState" : "stale",
+    "sort.direction.descending" : {
       "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "من الأعلى إلى الأقل"
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Price • Low to High"
+            "value" : "High to Low"
           }
         }
       }
     },
-    "sort.price.desc" : {
-      "extractionState" : "stale",
+    "sort.direction.title" : {
       "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "الاتجاه"
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Price • High to Low"
+            "value" : "Order"
           }
         }
       }
     },
-    "a11y.feed_start" : {
+    "sort.field.price" : {
       "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "السعر"
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Start streaming stock prices"
+            "value" : "Price"
           }
         }
       }
     },
-    "a11y.feed_stop" : {
+    "sort.field.price_change" : {
       "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تغير السعر"
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stop streaming stock prices"
+            "value" : "Price Change"
           }
         }
       }
     },
-    "a11y.sort_menu" : {
+    "sort.field.title" : {
       "localizations" : {
-        "en" : {
+        "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sort stock list"
+            "value" : "ترتيب حسب"
           }
-        }
-      }
-    },
-    "a11y.stock_row.hint" : {
-      "localizations" : {
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Shows company detail"
-          }
-        }
-      }
-    },
-    "a11y.stock_row.label" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%1$@, ticker %2$@. Last price %3$@. %4$@"
-          }
-        }
-      }
-    },
-    "a11y.theme_toggle" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toggle light or dark appearance"
+            "value" : "Sort by"
           }
         }
       }

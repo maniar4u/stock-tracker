@@ -5,18 +5,17 @@
 //  Created by Muhammad Ali Maniar on 03/05/2026.
 //
 
-import StockTrackerDomain
 import SwiftUI
 
 struct StocksListView: View {
-    @Bindable private var screenModel: StocksScreenModel
-    @Binding private var path: NavigationPath
+    @Bindable private var screenModel: StocksListViewModel
     private let resolvedDark: Bool
     private let toggleAppearance: () -> Void
 
-    init(screenModel: StocksScreenModel, path: Binding<NavigationPath>, resolvedDark: Bool, toggleAppearance: @escaping () -> Void) {
+    @Environment(\.stockPalette) private var palette
+
+    init(screenModel: StocksListViewModel, resolvedDark: Bool, toggleAppearance: @escaping () -> Void) {
         _screenModel = Bindable(screenModel)
-        _path = path
         self.resolvedDark = resolvedDark
         self.toggleAppearance = toggleAppearance
     }
@@ -25,58 +24,45 @@ struct StocksListView: View {
         Group {
             if let failure = screenModel.failurePresentation {
                 StockMessageView(presentation: failure, palette: palette, onRetry: {
-                    Task { @MainActor in
-                        await screenModel.retryAfterFailure()
-                    }
+                    Task { await screenModel.retryAfterFailure() }
                 })
             } else if screenModel.onboardingActive {
                 StockMessageView(presentation: .startSocketOnboarding, palette: palette)
             } else {
                 List(screenModel.rows) { row in
-                    Button {
-                        path.append(StockNavigationRoute.detail(symbol: row.symbol))
-                    } label: {
+                    NavigationLink(value: StockNavigationRoute.detail(symbol: row.symbol)) {
                         StockRowView(row: row, palette: palette)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("stock.row.\(row.symbol)")
-                    .accessibilityHint(Text(LocalizedStringKey("a11y.stock_row.hint")))
+                    .accessibilityIdentifier(AccessibilityID.row(row.symbol))
+                    .accessibilityHint(Text("a11y.stock_row.hint"))
                 }
                 .listStyle(.plain)
                 .animation(.easeInOut(duration: 0.2), value: screenModel.rows)
+                .accessibilityIdentifier(AccessibilityID.stockList)
             }
         }
-        .navigationTitle(Text(LocalizedStringKey("app.title")))
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if screenModel.isPersistenceDegraded {
+                PersistenceWarningBanner(palette: palette)
+            }
+        }
+        .navigationTitle(Text("app.title"))
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(placement: .topBarLeading) {
                 ConnectionIndicatorView(state: screenModel.connectionState, palette: palette)
-                    .accessibilityIdentifier("connection.indicator")
-                    .id(connectionStateRefreshID(screenModel.connectionState))
             }
 
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(action: toggleAppearance) {
                     Image(systemName: resolvedDark ? "moon.fill" : "moon")
-                        .accessibilityIdentifier("toolbar.theme_toggle")
                 }
-                .accessibilityLabel(Text(LocalizedStringKey("a11y.theme_toggle")))
+                .accessibilityIdentifier(AccessibilityID.themeToggle)
+                .accessibilityLabel(Text("a11y.theme_toggle"))
 
-                Menu {
-                    ForEach(SortOption.allCases, id: \.self) { option in
-                        Button {
-                            screenModel.sortOption = option
-                        } label: {
-                            Text(LocalizedStringKey(option.localizationKey))
-                        }
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down.circle")
-                        .accessibilityIdentifier("toolbar.sort")
-                }
-                .accessibilityLabel(Text(LocalizedStringKey("a11y.sort_menu")))
+                sortMenu
 
                 Button {
-                    Task { @MainActor in
+                    Task {
                         if screenModel.isStreamingRequested {
                             await screenModel.stopStreaming()
                         } else {
@@ -85,34 +71,64 @@ struct StocksListView: View {
                     }
                 } label: {
                     Image(systemName: screenModel.isStreamingRequested ? "stop.fill" : "play.fill")
-                        .accessibilityIdentifier("toolbar.feed_toggle")
                 }
+                .accessibilityIdentifier(AccessibilityID.feedToggle)
                 .accessibilityLabel(
-                    screenModel.isStreamingRequested
-                        ? Text(LocalizedStringKey("a11y.feed_stop"))
-                        : Text(LocalizedStringKey("a11y.feed_start"))
+                    screenModel.isStreamingRequested ? Text("a11y.feed_stop") : Text("a11y.feed_start")
                 )
             }
         }
     }
 
-    @Environment(\.stockPalette) private var palette
+    /// Two sort fields, each with its own direction: the field picker and the direction picker are independent.
+    private var sortMenu: some View {
+        Menu {
+            Picker(selection: $screenModel.sortOption.field) {
+                ForEach(SortField.allCases) { field in
+                    Text(field.title)
+                        .tag(field)
+                        .accessibilityIdentifier(AccessibilityID.sortField(field.rawValue))
+                }
+            } label: {
+                Text("sort.field.title")
+            }
+            .pickerStyle(.inline)
 
-    private func connectionStateRefreshID(_ state: FeedConnectionState) -> String {
-        switch state {
-        case .idle:
-            return "idle"
-        case .connecting:
-            return "connecting"
-        case .connected:
-            return "connected"
-        case let .reconnecting(attempt):
-            return "reconnecting.\(attempt)"
-        case .stopped:
-            return "stopped"
-        case let .failed(reason):
-            return "failed.\(String(describing: reason))"
+            Picker(selection: $screenModel.sortOption.direction) {
+                ForEach(SortDirection.allCases) { direction in
+                    Text(direction.title)
+                        .tag(direction)
+                        .accessibilityIdentifier(AccessibilityID.sortDirection(direction.rawValue))
+                }
+            } label: {
+                Text("sort.direction.title")
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "arrow.up.arrow.down.circle")
         }
+        .accessibilityIdentifier(AccessibilityID.sortMenu)
+        .accessibilityLabel(Text("a11y.sort_menu"))
+    }
+}
+
+private struct PersistenceWarningBanner: View {
+    let palette: StockPalette
+
+    var body: some View {
+        Label {
+            Text("banner.persistence")
+                .font(.footnote)
+        } icon: {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+        }
+        .foregroundStyle(palette.primaryText)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(palette.groupedSurface)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(AccessibilityID.persistenceBanner)
     }
 }
 
@@ -124,7 +140,9 @@ private struct ConnectionIndicatorView: View {
         Circle()
             .fill(indicatorColor)
             .frame(width: 10, height: 10)
-            .accessibilityLabel(Text(verbatim: accessibilityKey))
+            .accessibilityElement()
+            .accessibilityLabel(Text(state.statusText))
+            .accessibilityIdentifier(AccessibilityID.connectionIndicator)
     }
 
     private var indicatorColor: Color {
@@ -139,69 +157,76 @@ private struct ConnectionIndicatorView: View {
             return palette.secondaryText.opacity(0.45)
         }
     }
-
-    private var accessibilityKey: String {
-        switch state {
-        case .connected:
-            return String(localized: String.LocalizationValue("connection.connected"))
-        case .connecting:
-            return String(localized: String.LocalizationValue("connection.connecting"))
-        case .reconnecting:
-            return String(localized: String.LocalizationValue("connection.reconnecting"))
-        case .failed:
-            return String(localized: String.LocalizationValue("connection.failed"))
-        case .stopped:
-            return String(localized: String.LocalizationValue("connection.stopped"))
-        case .idle:
-            return String(localized: String.LocalizationValue("connection.idle"))
-        }
-    }
 }
 
 private struct StockRowView: View {
     let row: StockRowUIModel
     let palette: StockPalette
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            StockSymbolAvatarView(symbol: row.symbol, companyName: row.companyName, diameter: 42, palette: palette)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(row.symbol)
-                    .font(.headline)
-                    .foregroundStyle(palette.primaryText)
-
-                Text(row.companyName)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondaryText)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 8)
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(row.priceText)
-                    .font(.headline.monospacedDigit())
-                    .foregroundStyle(row.movementPositive ? palette.positive : palette.negative)
-
-                HStack(spacing: 6) {
-                    Image(systemName: row.movementPositive ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")
-                        .font(.caption2.weight(.bold))
-
-                    Text(row.movementLine)
-                        .font(.caption.monospacedDigit())
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        StockSymbolAvatarView(symbol: row.symbol, companyName: row.companyName, diameter: 42, palette: palette)
+                        Text(row.symbol)
+                            .font(.headline)
+                            .foregroundStyle(palette.primaryText)
+                            .fixedSize()
+                    }
+                    Text(row.companyName)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    priceAndMovement
                 }
-                .foregroundStyle(row.movementPositive ? palette.positive : palette.negative)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .center, spacing: 12) {
+                    StockSymbolAvatarView(symbol: row.symbol, companyName: row.companyName, diameter: 42, palette: palette)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.symbol)
+                            .font(.headline)
+                            .foregroundStyle(palette.primaryText)
+                        Text(row.companyName)
+                            .font(.subheadline)
+                            .foregroundStyle(palette.secondaryText)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    priceAndMovement
+                    Image(systemName: "chevron.forward")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(palette.secondaryText.opacity(0.35))
+                }
             }
-
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(palette.secondaryText.opacity(0.35))
         }
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
         .opacity(row.stalePresentation ? palette.staleOpacity : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(stockRowAccessibilityLabel(row))
+    }
+
+    private var priceAndMovement: some View {
+        VStack(alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 4) {
+            Text(row.priceText)
+                .contentTransition(.numericText())
+                .font(.headline.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            HStack(spacing: 6) {
+                Image(systemName: row.movementPositive ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")
+                    .font(.caption2.weight(.bold))
+                Text(row.movementLine)
+                    .font(.caption.monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+            }
+        }
+        .foregroundStyle(row.movementPositive ? palette.positive : palette.negative)
     }
 
     private func stockRowAccessibilityLabel(_ row: StockRowUIModel) -> String {

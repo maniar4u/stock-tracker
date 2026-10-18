@@ -19,40 +19,36 @@ struct StockMessageView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: presentation.symbolName)
-                .font(.system(size: 40, weight: .semibold))
-                .foregroundStyle(palette.secondaryText)
-
-            Text(LocalizedStringKey(presentation.titleKey))
-                .font(.title3.weight(.semibold))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(palette.primaryText)
-
-            Text(LocalizedStringKey(presentation.bodyKey))
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(palette.secondaryText)
-
+        ContentUnavailableView {
+            Label {
+                Text(presentation.title)
+            } icon: {
+                Image(systemName: presentation.symbolName)
+            }
+        } description: {
+            Text(presentation.message)
+        } actions: {
             if presentation.showsRetry, let onRetry {
                 Button(action: onRetry) {
-                    Text(LocalizedStringKey("message.retry"))
-                        .frame(maxWidth: .infinity)
+                    Text("message.retry")
                 }
                 .buttonStyle(.borderedProminent)
-                .padding(.top, 8)
+                .accessibilityIdentifier(AccessibilityID.messageRetry)
             }
         }
-        .padding(24)
+        .foregroundStyle(palette.primaryText)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.screenBackground)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            String(
-                format: "%@. %@",
-                String(localized: String.LocalizationValue(presentation.titleKey)),
-                String(localized: String.LocalizationValue(presentation.bodyKey))
-            )
-        )
+        .accessibilityIdentifier(AccessibilityID.messageView)
     }
+}
+
+#Preview("Onboarding") {
+    StockMessageView(presentation: .startSocketOnboarding, palette: .palette(for: .light))
+}
+
+#Preview("Failure, Arabic RTL") {
+    StockMessageView(presentation: .feedTransportFailure, palette: .palette(for: .dark), onRetry: {})
+        .environment(\.locale, Locale(identifier: "ar"))
+        .environment(\.layoutDirection, .rightToLeft)
 }

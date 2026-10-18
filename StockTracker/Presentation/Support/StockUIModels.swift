@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import StockTrackerDomain
 
 struct StockRowUIModel: Equatable, Identifiable {
     var id: String { symbol }

@@ -1,5 +1,5 @@
 //
-//  StocksScreenModel.swift
+//  StockDetailViewModel.swift
 //  StockTracker
 //
 //  Created by Muhammad Ali Maniar on 03/05/2026.
@@ -7,24 +7,28 @@
 
 import Foundation
 import Observation
-import StockTrackerDomain
 
 @Observable @MainActor
 final class StockDetailViewModel {
     private let repository: any StockRepositoryProtocol
+    private let feedStatus: any FeedStatusProviding
     private let symbol: String
-
-    private var connectionTask: Task<Void, Never>?
-    private var quoteTask: Task<Void, Never>?
-    private var quoteCoalesceTask: Task<Void, Never>?
+    @ObservationIgnored private let observer: LiveQuoteObserver
 
     private(set) var uiModel: StockDetailUIModel?
     private var catalogEntry: StockCatalogEntry?
     private var connectionState: FeedConnectionState = .idle
 
-    init(repository: any StockRepositoryProtocol, symbol: String) {
+    init(
+        repository: any StockRepositoryProtocol,
+        feedStatus: any FeedStatusProviding,
+        symbol: String,
+        sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
         self.repository = repository
+        self.feedStatus = feedStatus
         self.symbol = symbol
+        observer = LiveQuoteObserver(repository: repository, feedStatus: feedStatus, sleep: sleep)
     }
 
     func activate() async {
@@ -38,65 +42,33 @@ final class StockDetailViewModel {
             return
         }
 
-        connectionState = repository.currentFeedConnectionState
+        connectionState = feedStatus.currentConnectionState
+        rebuildFromLatestQuote()
 
-        rebuildModel(quote: repository.currentMergedQuotes().first { $0.symbol == self.symbol })
-
-        connectionTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
+        observer.start(
+            symbol: symbol,
+            onConnection: { [weak self] state in
+                self?.connectionState = state
+                self?.rebuildFromLatestQuote()
+            },
+            onQuotes: { [weak self] in
+                self?.rebuildFromLatestQuote()
             }
-
-            for await state in repository.connectionEvents() {
-                connectionState = state
-                rebuildModel(quote: repository.currentMergedQuotes().first { $0.symbol == self.symbol })
-            }
-        }
-
-        quoteTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
-            for await incoming in repository.quoteEvents() where incoming.symbol == self.symbol {
-                scheduleCoalescedRebuild(quote: incoming)
-            }
-        }
+        )
     }
 
     func deactivate() {
-        connectionTask?.cancel()
-        connectionTask = nil
-        quoteTask?.cancel()
-        quoteTask = nil
-        quoteCoalesceTask?.cancel()
-        quoteCoalesceTask = nil
+        observer.stop()
     }
 
-    private func scheduleCoalescedRebuild(quote: StockQuote) {
-        quoteCoalesceTask?.cancel()
-        quoteCoalesceTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
-            try? await Task.sleep(for: QuoteStreamPresentationTiming.uiRefreshCoalesce)
-            rebuildModel(quote: quote)
-        }
-    }
-
-    private func rebuildModel(quote: StockQuote?) {
+    private func rebuildFromLatestQuote() {
         guard let catalogEntry else {
             uiModel = nil
             return
         }
 
-        let stale = stalePresentationActive()
+        let quote = repository.currentMergedQuotes().first { $0.symbol == symbol }
+        let stale = LiveQuoteObserver.isStale(feedStatus: feedStatus, connectionState: connectionState)
         uiModel = StockUIMapper.detailUIModel(catalog: catalogEntry, quote: quote, stalePresentation: stale)
-    }
-
-    private func stalePresentationActive() -> Bool {
-        let connectedLive = repository.isUserStreamingRequested && connectionState == .connected
-        return connectedLive == false
     }
 }

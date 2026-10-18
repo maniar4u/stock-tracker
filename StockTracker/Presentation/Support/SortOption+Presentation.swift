@@ -5,19 +5,22 @@
 //  Created by Muhammad Ali Maniar on 03/05/2026.
 //
 
-import StockTrackerDomain
+import Foundation
 
-extension SortOption {
-    var localizationKey: String {
+extension SortField {
+    var title: LocalizedStringResource {
         switch self {
-        case .priceAscending:
-            return "sort.price.asc"
-        case .priceDescending:
-            return "sort.price.desc"
-        case .changeAscending:
-            return "sort.change.asc"
-        case .changeDescending:
-            return "sort.change.desc"
+        case .price: return "sort.field.price"
+        case .priceChange: return "sort.field.price_change"
+        }
+    }
+}
+
+extension SortDirection {
+    var title: LocalizedStringResource {
+        switch self {
+        case .ascending: return "sort.direction.ascending"
+        case .descending: return "sort.direction.descending"
         }
     }
 }

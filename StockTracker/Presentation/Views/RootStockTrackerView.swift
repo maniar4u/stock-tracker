@@ -5,42 +5,40 @@
 //  Created by Muhammad Ali Maniar on 03/05/2026.
 //
 
-import StockTrackerDomain
 import SwiftUI
 
 struct RootStockTrackerView: View {
-    private let repository: any StockRepositoryProtocol
-    private let feedLifecycle: StockFeedLifecycleControlling
+    private let dependencies: AppDependencies
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var screenModel: StocksScreenModel
-    @State private var path = NavigationPath()
+    @State private var screenModel: StocksListViewModel
     @State private var prefersDarkAppearance: Bool?
 
-    init(repository: any StockRepositoryProtocol) {
-        self.repository = repository
-        let lifecycle = StockFeedLifecycleService(repository: repository)
-        feedLifecycle = lifecycle
-        _screenModel = State(initialValue: StocksScreenModel(repository: repository, feedLifecycle: lifecycle))
+    init(dependencies: AppDependencies) {
+        self.dependencies = dependencies
+        _screenModel = State(initialValue: StocksListViewModel(
+            repository: dependencies.repository, feed: dependencies.feedControls, startsFeedOnLaunch: true
+        ))
     }
 
     var body: some View {
         let paletteScheme: ColorScheme = resolvedDark ? .dark : .light
         let palette = StockPalette.palette(for: paletteScheme)
 
-        NavigationStack(path: $path) {
+        NavigationStack {
             StocksListView(
                 screenModel: screenModel,
-                path: $path,
                 resolvedDark: resolvedDark,
                 toggleAppearance: toggleAppearance
             )
             .navigationDestination(for: StockNavigationRoute.self) { route in
                 switch route {
                 case let .detail(symbol):
-                    StockDetailView(repository: repository, symbol: symbol)
+                    StockDetailView(
+                        repository: dependencies.repository, feedStatus: dependencies.feedStatus, symbol: symbol
+                    )
                 }
             }
         }
@@ -49,11 +47,14 @@ struct RootStockTrackerView: View {
         .task {
             await screenModel.activate()
         }
+        .onDisappear {
+            screenModel.deactivate()
+        }
         .task {
-            await feedLifecycle.observeReachabilityForAutomaticFeedRecovery()
+            await dependencies.networkObserver.observeChanges(using: dependencies.handleNetworkPathChange)
         }
         .task(id: scenePhase) {
-            await repository.applySceneActivity(scenePhase == .active ? .active : .inactive)
+            await dependencies.applySceneActivity.execute(scenePhase == .active ? .active : .inactive)
         }
     }
 

@@ -19,8 +19,8 @@ struct StockTrackerApp: App {
                         palette: StockPalette.palette(for: .light)
                     )
 
-                case let .ready(repository, container):
-                    RootStockTrackerView(repository: repository)
+                case let .ready(dependencies, container):
+                    RootStockTrackerView(dependencies: dependencies)
                         .modelContainer(container)
                 }
             }

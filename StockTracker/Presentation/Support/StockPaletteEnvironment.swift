@@ -7,13 +7,6 @@
 
 import SwiftUI
 
-private enum StockPaletteKey: EnvironmentKey {
-    static let defaultValue = StockPalette.palette(for: .light)
-}
-
 extension EnvironmentValues {
-    var stockPalette: StockPalette {
-        get { self[StockPaletteKey.self] }
-        set { self[StockPaletteKey.self] = newValue }
-    }
+    @Entry var stockPalette = StockPalette.palette(for: .light)
 }

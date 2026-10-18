@@ -5,7 +5,6 @@
 //  Created by Muhammad Ali Maniar on 03/05/2026.
 //
 
-import StockTrackerDomain
 import SwiftUI
 
 struct StockDetailView: View {
@@ -14,10 +13,10 @@ struct StockDetailView: View {
 
     @State private var model: StockDetailViewModel
 
-    init(repository: any StockRepositoryProtocol, symbol: String) {
+    init(repository: any StockRepositoryProtocol, feedStatus: any FeedStatusProviding, symbol: String) {
         self.repository = repository
         self.symbol = symbol
-        _model = State(initialValue: StockDetailViewModel(repository: repository, symbol: symbol))
+        _model = State(initialValue: StockDetailViewModel(repository: repository, feedStatus: feedStatus, symbol: symbol))
     }
 
     var body: some View {
@@ -32,6 +31,7 @@ struct StockDetailView: View {
                         figuresSection(uiModel: uiModel)
 
                         Text(uiModel.descriptionText)
+                            .accessibilityIdentifier(AccessibilityID.detailDescription)
                             .font(.body)
                             .foregroundStyle(palette.secondaryText)
                             .padding(.top, 8)
@@ -43,6 +43,8 @@ struct StockDetailView: View {
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel(Text("detail.loading"))
+                    .accessibilityIdentifier(AccessibilityID.detailLoading)
             }
         }
         .background(palette.screenBackground)
@@ -57,6 +59,7 @@ struct StockDetailView: View {
     }
 
     @Environment(\.stockPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private func header(uiModel: StockDetailUIModel) -> some View {
         HStack(alignment: .center, spacing: 14) {
@@ -79,19 +82,25 @@ struct StockDetailView: View {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(AccessibilityID.detailHeader)
     }
 
     private func priceSection(uiModel: StockDetailUIModel) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringKey("detail.last_price"))
+            Text("detail.last_price")
+                .accessibilityIdentifier(AccessibilityID.detailLastPriceLabel)
                 .font(.footnote)
                 .foregroundStyle(palette.secondaryText)
 
             Text(uiModel.lastPriceText)
+                .accessibilityIdentifier(AccessibilityID.detailPrice)
+                .contentTransition(.numericText())
                 .font(.largeTitle.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .foregroundStyle(uiModel.movementPositive ? palette.positive : palette.negative)
 
-            Text(LocalizedStringKey("detail.movement"))
+            Text("detail.movement")
                 .font(.footnote)
                 .foregroundStyle(palette.secondaryText)
 
@@ -100,29 +109,39 @@ struct StockDetailView: View {
                     .font(.caption.weight(.bold))
 
                 Text(uiModel.movementLine)
+                    .accessibilityIdentifier(AccessibilityID.detailMovement)
                     .font(.headline.monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
             }
             .foregroundStyle(uiModel.movementPositive ? palette.positive : palette.negative)
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private func figuresSection(uiModel: StockDetailUIModel) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(LocalizedStringKey("detail.key_figures"))
+            Text("detail.key_figures")
                 .font(.headline)
                 .foregroundStyle(palette.primaryText)
                 .accessibilityAddTraits(.isHeader)
 
             VStack(spacing: 0) {
-                figureRow(titleKey: "detail.previous_close", valueText: uiModel.previousCloseText, emphasisPositive: nil)
-                Divider()
-                figureRow(titleKey: "detail.day_change", valueText: uiModel.dayChangeText, emphasisPositive: uiModel.movementPositive)
+                figureRow(
+                    title: "detail.previous_close", valueText: uiModel.previousCloseText, emphasisPositive: nil,
+                    identifier: AccessibilityID.detailPreviousClose
+                )
                 Divider()
                 figureRow(
-                    titleKey: "detail.day_change_pct",
+                    title: "detail.day_change", valueText: uiModel.dayChangeText, emphasisPositive: uiModel.movementPositive,
+                    identifier: AccessibilityID.detailDayChange
+                )
+                Divider()
+                figureRow(
+                    title: "detail.day_change_pct",
                     valueText: uiModel.dayChangePercentText,
-                    emphasisPositive: uiModel.movementPositive
+                    emphasisPositive: uiModel.movementPositive,
+                    identifier: AccessibilityID.detailDayChangePercent
                 )
             }
             .padding(.horizontal, 14)
@@ -130,21 +149,33 @@ struct StockDetailView: View {
             .background(palette.groupedSurface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
-    private func figureRow(titleKey: String, valueText: String, emphasisPositive: Bool?) -> some View {
-        HStack {
-            Text(LocalizedStringKey(titleKey))
+    private func figureRow(
+        title: LocalizedStringResource,
+        valueText: String,
+        emphasisPositive: Bool?,
+        identifier: String
+    ) -> some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout())
+        return layout {
+            Text(title)
                 .foregroundStyle(palette.secondaryText)
 
-            Spacer()
+            if !dynamicTypeSize.isAccessibilitySize { Spacer() }
 
             Text(valueText)
                 .font(.body.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .foregroundStyle(color(for: emphasisPositive))
         }
         .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(identifier)
     }
 
     private func color(for emphasisPositive: Bool?) -> Color {
