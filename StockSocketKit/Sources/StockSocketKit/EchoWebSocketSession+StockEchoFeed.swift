@@ -22,6 +22,10 @@ extension EchoWebSocketSession: StockEchoFeed {
         await stop()
     }
 
+    public func requestReconnect() async {
+        await invalidateCurrentConnection()
+    }
+
     public func applyOutboundSuspension(_ suspended: Bool) async {
         setOutboundSuspended(suspended)
     }

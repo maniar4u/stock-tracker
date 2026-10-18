@@ -1,37 +1,56 @@
-//
-//  EchoWebSocketSession.swift
-//  StockSocketKit
-//
-//  Created by Muhammad Ali Maniar on 01/05/2026.
-//
-
 import Foundation
+import os
 
 public actor EchoWebSocketSession {
-    private let url: URL
-    private let symbols: [String]
+    typealias ConnectionBuilder = @Sendable () async -> any EchoSocketConnection
+    typealias Sleeper = @Sendable (UInt64) async throws -> Void
+
+    /// Where the driver is in its connect / run / back-off cycle. The socket only exists in phases that own one,
+    /// so "which connection do I close?" has exactly one answer.
+    private enum Phase {
+        case building
+        case opening(any EchoSocketConnection)
+        case open(any EchoSocketConnection)
+        case backingOff
+
+        var socket: (any EchoSocketConnection)? {
+            switch self {
+            case let .opening(socket), let .open(socket): return socket
+            case .building, .backingOff: return nil
+            }
+        }
+    }
+
+    /// Everything that belongs to a single start()...stop() run. Dropping the value drops all of it together.
+    private struct Run {
+        let id: UUID
+        var task: Task<Void, Never>?
+        var phase = Phase.building
+        var receivedTickSinceConnect = false
+        var reportedServerClose = false
+        var consecutiveDecodeFailures = 0
+        var attemptStartedAt: ContinuousClock.Instant?
+        var connectInterval: OSSignpostIntervalState?
+    }
+
     private let logger: EchoLogger?
     private let backoffPolicy: ExponentialBackoffPolicy
     private let outboundIntervalNanoseconds: UInt64
     private let handshakeTimeoutNanoseconds: UInt64
-    private let tlsHooks: EchoTLSHooks
     private let transportMetrics: EchoTransportMetrics?
     private let jsonDecoder: JSONDecoder
     private let jsonEncoder: JSONEncoder
+    private let connectionBuilder: ConnectionBuilder
+    private let sleep: Sleeper
+    private let healthPolicy: EchoHealthPolicy
+    private let signposter = OSSignposter(subsystem: "com.stocktracker.socket", category: "transport")
+    private var generator: SyntheticPriceGenerator
     private var continuation: AsyncStream<WebSocketPublicEvent>.Continuation?
-    private var workIntent: TransportWorkIntent = .userStopped
-    private var reconnectAttempt = 0
-    private var driverTask: Task<Void, Never>?
-    private var urlSession: URLSession?
-    private var urlSessionDelegate: EchoWebSocketURLSessionDelegate?
-    private var socketTask: URLSessionWebSocketTask?
-    private var linkState: TransportLinkState = .inactive
+    private var streamID = UUID()
+    private var run: Run?
     private var outboundSuspended = false
-    private var lastTradePrices: [String: Double] = [:]
-    private var referenceClosePrices: [String: Double] = [:]
-    private var pendingTerminalTransportFailure: WebSocketTransportFailure?
-    private var urlSessionCompletion: URLSessionCompletionExpectation = .surfaceToDriver
-    private var suppressDisconnectOnNextStop = false
+    private var suspensionObservedSinceWatchdogCheck = false
+    private var counters = EchoTransportDiagnostics()
 
     public init(
         url: URL,
@@ -41,440 +60,374 @@ public actor EchoWebSocketSession {
         logger: EchoLogger?,
         tlsHooks: EchoTLSHooks = EchoTLSHooks(),
         transportMetrics: EchoTransportMetrics? = nil,
-        handshakeTimeoutNanoseconds: UInt64 = 30_000_000_000,
+        handshakeTimeoutNanoseconds: UInt64 = EchoTransportDefaults.handshakeTimeoutNanoseconds,
         jsonDecoder: JSONDecoder = JSONDecoder(),
-        jsonEncoder: JSONEncoder = JSONEncoder()
+        jsonEncoder: JSONEncoder = JSONEncoder(),
+        healthPolicy: EchoHealthPolicy = EchoHealthPolicy()
     ) {
-        self.url = url
-        self.symbols = symbols
+        self.healthPolicy = healthPolicy
+        self.generator = SyntheticPriceGenerator(symbols: symbols)
         self.logger = logger
         self.backoffPolicy = backoffPolicy
         self.outboundIntervalNanoseconds = outboundIntervalNanoseconds
-        self.tlsHooks = tlsHooks
-        self.transportMetrics = transportMetrics
         self.handshakeTimeoutNanoseconds = handshakeTimeoutNanoseconds
+        self.transportMetrics = transportMetrics
         self.jsonDecoder = jsonDecoder
         self.jsonEncoder = jsonEncoder
+        self.connectionBuilder = {
+            URLSessionEchoSocketConnection(url: url, tlsHooks: tlsHooks, timeout: handshakeTimeoutNanoseconds)
+        }
+        self.sleep = { try await Task.sleep(nanoseconds: $0) }
     }
 
-    internal var handshakeTimeoutNanosecondsConfigured: UInt64 {
-        handshakeTimeoutNanoseconds
+    init(
+        symbols: [String],
+        backoffPolicy: ExponentialBackoffPolicy,
+        outboundIntervalNanoseconds: UInt64 = EchoTransportDefaults.outboundIntervalNanoseconds,
+        healthPolicy: EchoHealthPolicy = EchoHealthPolicy(),
+        transportMetrics: EchoTransportMetrics? = nil,
+        generator: SyntheticPriceGenerator? = nil,
+        connectionBuilder: @escaping ConnectionBuilder,
+        sleep: @escaping Sleeper = { try await Task.sleep(nanoseconds: $0) }
+    ) {
+        self.healthPolicy = healthPolicy
+        self.generator = generator ?? SyntheticPriceGenerator(symbols: symbols)
+        self.logger = nil
+        self.backoffPolicy = backoffPolicy
+        self.outboundIntervalNanoseconds = outboundIntervalNanoseconds
+        self.handshakeTimeoutNanoseconds = EchoTransportDefaults.handshakeTimeoutNanoseconds
+        self.transportMetrics = transportMetrics
+        self.jsonDecoder = JSONDecoder()
+        self.jsonEncoder = JSONEncoder()
+        self.connectionBuilder = connectionBuilder
+        self.sleep = sleep
     }
+
+    public var handshakeTimeoutNanosecondsConfigured: UInt64 { handshakeTimeoutNanoseconds }
+
+    public func diagnostics() -> EchoTransportDiagnostics { counters }
 
     public func wireEventsStream(
         bufferingPolicy: AsyncStream<WebSocketPublicEvent>.Continuation.BufferingPolicy = WebSocketPublicEventStreamDefaults.bufferingPolicy
     ) -> AsyncStream<WebSocketPublicEvent> {
-        AsyncStream(bufferingPolicy: bufferingPolicy) { continuation in
+        let id = UUID()
+        streamID = id
+        continuation?.finish()
+        return AsyncStream(bufferingPolicy: bufferingPolicy) { continuation in
             self.continuation = continuation
             continuation.onTermination = { @Sendable _ in
-                Task { await self.handleStreamTermination() }
+                Task { await self.handleStreamTermination(id: id) }
             }
         }
     }
 
     public func start() {
-        guard driverTask == nil else {
-            return
-        }
-        workIntent = .streaming
-        driverTask = Task {
-            await self.runDriver()
-        }
+        guard !Task.isCancelled, run == nil else { return }
+        let id = UUID()
+        run = Run(id: id)
+        run?.task = Task { await self.runDriver(id: id) }
     }
 
     public func stop() async {
-        workIntent = .userStopped
-        let skipDisconnect = suppressDisconnectOnNextStop
-        suppressDisconnectOnNextStop = false
-        let task = driverTask
-        driverTask = nil
-
-        task?.cancel()
-
-        teardownSocket()
-        urlSession?.invalidateAndCancel()
-        urlSession = nil
-        urlSessionDelegate = nil
-
-        reconnectAttempt = 0
-        let cont = continuation
-
-        if skipDisconnect == false {
-            cont?.yield(.disconnected(userInitiated: true))
-        }
-        cont?.finish()
+        let finished = run
+        run = nil
+        let oldContinuation = continuation
         continuation = nil
+        oldContinuation?.yield(.disconnected(userInitiated: true))
+        oldContinuation?.finish()
+        if let interval = finished?.connectInterval { signposter.endInterval("ConnectToFirstTick", interval) }
+        await finished?.phase.socket?.close(code: .normalClosure, reason: nil)
+        finished?.task?.cancel()
+        await finished?.task?.value
+        logger?.info("Echo session stopped \(describe(counters))")
+    }
 
-        logger?.info("Echo session stopped")
+    func invalidateCurrentConnection() async {
+        guard let run, run.task != nil else { return }
+        await run.phase.socket?.close(code: .goingAway, reason: nil)
     }
 
     public func setOutboundSuspended(_ suspended: Bool) {
         outboundSuspended = suspended
+        if suspended { suspensionObservedSinceWatchdogCheck = true }
     }
 
-    nonisolated func urlSessionTaskDidComplete(error: Error?) {
-        Task {
-            await self.onURLSessionTaskCompleted(error: error)
-        }
-    }
-
-    private func onURLSessionTaskCompleted(error: Error?) {
-        linkState = .broken
-
-        if workIntent == .userStopped {
-            return
-        }
-
-        if urlSessionCompletion == .ignoreNextForScheduledReconnect {
-            urlSessionCompletion = .surfaceToDriver
-            return
-        }
-
-        guard shouldTreatTaskCompletionAsTransportLoss(error: error) else {
-            return
-        }
-
-        if pendingTerminalTransportFailure == nil {
-            pendingTerminalTransportFailure = .closedUnexpectedly
-        }
-
-        socketTask?.cancel(with: .goingAway, reason: nil)
-    }
-
-    private func shouldTreatTaskCompletionAsTransportLoss(error: Error?) -> Bool {
-        if error == nil {
-            return true
-        }
-
-        if error is CancellationError {
-            return false
-        }
-
-        if let urlError = error as? URLError, urlError.code == .cancelled {
-            return false
-        }
-
-        return true
-    }
-
-    private func handleStreamTermination() async {
+    private func handleStreamTermination(id: UUID) async {
+        guard streamID == id else { return }
         await stop()
     }
 
+    private func isCurrent(_ id: UUID) -> Bool {
+        run?.id == id && !Task.isCancelled
+    }
+
     private func emit(_ event: WebSocketPublicEvent) {
-        continuation?.yield(event)
-    }
-
-    private func teardownSocket() {
-        socketTask?.cancel(with: .goingAway, reason: nil)
-        socketTask = nil
-        linkState = .broken
-    }
-
-    private func requestTransportHalt(with failure: WebSocketTransportFailure) {
-        if pendingTerminalTransportFailure == nil {
-            pendingTerminalTransportFailure = failure
+        guard let continuation else { return }
+        if case .dropped = continuation.yield(event) {
+            counters.eventsDropped += 1
+            transportMetrics?.onEventDropped?(event)
         }
-
-        linkState = .broken
-        socketTask?.cancel(with: .goingAway, reason: nil)
     }
 
-    private func runDriver() async {
-        defer {
-            driverTask = nil
-        }
+    private func describe(_ counters: EchoTransportDiagnostics) -> String {
+        "frames=\(counters.framesDecoded) droppedFrames=\(counters.framesDropped) droppedEvents=\(counters.eventsDropped) "
+            + "reconnects=\(counters.reconnects) stale=\(counters.staleDataReconnects)"
+    }
 
-        while !Task.isCancelled {
-            switch workIntent {
-            case .userStopped:
+    // MARK: Driver
+
+    private func runDriver(id: UUID) async {
+        defer { finishDriver(id: id) }
+        var reconnectAttempt = 0
+        while isCurrent(id) {
+            beginAttempt(id)
+            let socket = await connectionBuilder()
+            guard isCurrent(id) else {
+                await socket.close()
                 return
-            case .streaming:
-                break
             }
-
-            switch await openSocketSession() {
-            case .handshook:
-                break
-            case .abortedBecauseUserStopped:
-                emit(.disconnected(userInitiated: true))
-                return
-            case .handshakeFailed:
-                let delay = backoffPolicy.delayNanoseconds(forAttempt: reconnectAttempt)
-                reconnectAttempt += 1
-                emit(.reconnectScheduled(attempt: reconnectAttempt))
-                transportMetrics?.onReconnectSleep?(reconnectAttempt, delay)
-                logger?.debug("Reconnect sleeping \(delay) ns attempt \(reconnectAttempt)")
-                try? await Task.sleep(nanoseconds: delay)
-                continue
-            }
-
-            reconnectAttempt = 0
-            emit(.connected)
-
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    await self.receiveLoop()
+            run?.phase = .opening(socket)
+            run?.reportedServerClose = false
+            do {
+                try await socket.open()
+                guard isCurrent(id) else {
+                    await socket.close()
+                    return
                 }
-
-                group.addTask {
-                    await self.outboundLoop()
-                }
-            }
-
-            let terminalFailure = pendingTerminalTransportFailure
-            pendingTerminalTransportFailure = nil
-
-            if let terminalFailure {
-                teardownSocket()
-                urlSession?.invalidateAndCancel()
-                urlSession = nil
-                urlSessionDelegate = nil
-                suppressDisconnectOnNextStop = true
-                transportMetrics?.onTerminalTransportFailure?(terminalFailure)
-                emit(.transportFailure(terminalFailure))
-                return
-            }
-
-            urlSessionCompletion = .ignoreNextForScheduledReconnect
-
-            teardownSocket()
-            urlSession?.invalidateAndCancel()
-            urlSession = nil
-            urlSessionDelegate = nil
-
-            switch workIntent {
-            case .userStopped:
-                emit(.disconnected(userInitiated: true))
-                return
-            case .streaming:
+                transportMetrics?.onHandshakeCompleted?(true)
+                run?.receivedTickSinceConnect = false
+                run?.consecutiveDecodeFailures = 0
+                run?.phase = .open(socket)
+                emit(.connected)
+                let failure = await runIO(socket: socket, id: id)
+                await socket.close()
+                guard isCurrent(id) else { return }
+                if run?.receivedTickSinceConnect == true { reconnectAttempt = 0 }
+                if finishIfTerminal(failure) { return }
                 emit(.disconnected(userInitiated: false))
-                let delay = backoffPolicy.delayNanoseconds(forAttempt: reconnectAttempt)
-                reconnectAttempt += 1
-                emit(.reconnectScheduled(attempt: reconnectAttempt))
-                transportMetrics?.onReconnectSleep?(reconnectAttempt, delay)
-                logger?.debug("Session ended; backoff \(delay) ns attempt \(reconnectAttempt)")
-                try? await Task.sleep(nanoseconds: delay)
+            } catch {
+                await socket.close()
+                guard isCurrent(id) else { return }
+                counters.handshakeFailures += 1
+                transportMetrics?.onHandshakeCompleted?(false)
+                if handleHandshakeFailure(error) { return }
             }
-        }
-    }
-
-    private func openSocketSession() async -> HandshakeSessionOutcome {
-        urlSession?.invalidateAndCancel()
-
-        let handshake = WebSocketHandshakeAwaiter()
-        let delegate = EchoWebSocketURLSessionDelegate(handshake: handshake, owner: self, tlsHooks: tlsHooks)
-
-        let configuration = URLSessionConfiguration.default
-        configuration.waitsForConnectivity = false
-
-        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: .main)
-        let task = session.webSocketTask(with: url)
-
-        urlSessionDelegate = delegate
-        urlSession = session
-        socketTask = task
-        linkState = .active
-
-        switch workIntent {
-        case .userStopped:
-            session.invalidateAndCancel()
-            urlSession = nil
-            urlSessionDelegate = nil
-            socketTask = nil
-            return .abortedBecauseUserStopped
-        case .streaming:
-            break
-        }
-
-        task.resume()
-
-        let handshakeOutcome = await raceFirstHandshakeResult(handshake)
-        switch handshakeOutcome {
-        case .success:
-            transportMetrics?.onHandshakeCompleted?(true)
-        case .failure:
-            transportMetrics?.onHandshakeCompleted?(false)
-        }
-
-        switch workIntent {
-        case .userStopped:
-            session.invalidateAndCancel()
-            urlSession = nil
-            urlSessionDelegate = nil
-            socketTask = nil
-            return .abortedBecauseUserStopped
-
-        case .streaming:
-            break
-        }
-
-        if case .failure(let error) = handshakeOutcome {
-            logger?.debug("WebSocket handshake failed \(error.localizedDescription)")
-            session.invalidateAndCancel()
-            urlSession = nil
-            urlSessionDelegate = nil
-            socketTask = nil
-            linkState = .broken
-            return .handshakeFailed
-        }
-
-        return .handshook
-    }
-
-    private func raceFirstHandshakeResult(_ handshake: WebSocketHandshakeAwaiter) async -> Result<Void, Error> {
-        let handshakeCap = handshakeTimeoutNanoseconds
-        return await withTaskGroup(of: Result<Void, Error>.self) { group in
-            group.addTask {
-                await handshake.waitHandshakeResult()
-            }
-
-            group.addTask {
-                try? await Task.sleep(nanoseconds: handshakeCap)
-                return .failure(URLError(.timedOut))
-            }
-
-            guard let first = await group.next() else {
-                group.cancelAll()
-                return .failure(URLError(.unknown))
-            }
-
-            group.cancelAll()
-            return first
-        }
-    }
-
-    private func shouldContinueIOPumps() -> Bool {
-        switch workIntent {
-        case .userStopped:
-            return false
-        case .streaming:
-            return linkState == .active
-        }
-    }
-
-    private func receiveLoop() async {
-        while !Task.isCancelled {
-            guard shouldContinueIOPumps() else {
-                break
-            }
-
-            guard let socketTask else {
-                linkState = .broken
-                break
-            }
-
+            run?.phase = .backingOff
+            endConnectInterval()
+            let delay = backoffPolicy.delayNanoseconds(forAttempt: reconnectAttempt)
+            reconnectAttempt = min(reconnectAttempt + 1, 60)
+            counters.reconnects += 1
+            emit(.reconnectScheduled(attempt: reconnectAttempt))
+            transportMetrics?.onReconnectSleep?(reconnectAttempt, delay)
             do {
-                let message = try await socketTask.receive()
-                switch message {
-                case let .string(text):
-                    guard let data = text.data(using: .utf8) else {
-                        requestTransportHalt(with: .decodingFailed)
-                        break
-                    }
+                try await sleep(delay)
+            } catch {
+                return
+            }
+        }
+    }
 
-                    await decodePayload(from: data)
+    private func finishDriver(id: UUID) {
+        guard run?.id == id else { return }
+        endConnectInterval()
+        run = nil
+    }
 
-                case let .data(data):
-                    await decodePayload(from: data)
+    private func beginAttempt(_ id: UUID) {
+        guard run?.id == id else { return }
+        run?.phase = .building
+        run?.attemptStartedAt = .now
+        run?.connectInterval = signposter.beginInterval("ConnectToFirstTick")
+    }
 
-                @unknown default:
-                    requestTransportHalt(with: .closedUnexpectedly)
+    private func endConnectInterval() {
+        guard let interval = run?.connectInterval else { return }
+        signposter.endInterval("ConnectToFirstTick", interval)
+        run?.connectInterval = nil
+    }
+
+    private func recordFirstTickIfNeeded() {
+        guard run?.receivedTickSinceConnect == false else { return }
+        run?.receivedTickSinceConnect = true
+        endConnectInterval()
+        guard let started = run?.attemptStartedAt else { return }
+        let elapsed = started.duration(to: .now)
+        let milliseconds = Int(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
+        counters.lastTimeToFirstTickMilliseconds = milliseconds
+        transportMetrics?.onTimeToFirstTick?(milliseconds)
+    }
+
+    private func handleHandshakeFailure(_ error: Error) -> Bool {
+        if let close = error as? WebSocketClose {
+            reportServerClose(close)
+            if !close.shouldRetry {
+                emitTerminal(.closedByServer(code: close.code))
+                return true
+            }
+        }
+        logger?.debug("WebSocket handshake failed \(error.localizedDescription)")
+        return false
+    }
+
+    // MARK: I/O loops
+
+    private func runIO(socket: any EchoSocketConnection, id: UUID) async -> WebSocketTransportFailure? {
+        await withTaskGroup(of: WebSocketTransportFailure?.self) { group in
+            group.addTask { await self.receiveLoop(socket: socket, id: id) }
+            group.addTask { await self.outboundLoop(socket: socket, id: id) }
+            group.addTask { await self.heartbeatLoop(socket: socket, id: id) }
+            group.addTask { await self.staleDataWatchdog(id: id) }
+            let failure = await group.next() ?? nil
+            let code: URLSessionWebSocketTask.CloseCode
+            switch failure {
+            case .decodingFailed: code = .unsupportedData
+            case let .closedByServer(serverCode): code = WebSocketClose(code: serverCode, reason: nil).responseCode
+            default: code = .goingAway
+            }
+            await socket.close(code: code, reason: nil)
+            group.cancelAll()
+            return failure
+        }
+    }
+
+    private func receiveLoop(socket: any EchoSocketConnection, id: UUID) async -> WebSocketTransportFailure? {
+        while isCurrent(id) {
+            do {
+                let message = try await socket.receive()
+                guard isCurrent(id) else { return nil }
+                if let failure = ingest(message) { return failure }
+            } catch {
+                guard isCurrent(id) else { return nil }
+                return failure(from: error, timeout: .closedUnexpectedly)
+            }
+        }
+        return nil
+    }
+
+    /// Decodes one frame. A bad frame is dropped and counted; only a run of them ends the feed.
+    private func ingest(_ message: URLSessionWebSocketTask.Message) -> WebSocketTransportFailure? {
+        let data: Data?
+        switch message {
+        case let .string(text): data = Data(text.utf8)
+        case let .data(bytes): data = bytes
+        @unknown default: data = nil
+        }
+        guard let data, let batch = EchoWireDecoder.decode(data, using: jsonDecoder) else {
+            counters.framesDropped += 1
+            transportMetrics?.onFrameDropped?()
+            run?.consecutiveDecodeFailures += 1
+            let streak = run?.consecutiveDecodeFailures ?? 0
+            logger?.debug("Dropped undecodable frame (\(streak) in a row)")
+            return streak >= healthPolicy.maxConsecutiveDecodeFailures ? .decodingFailed : nil
+        }
+        run?.consecutiveDecodeFailures = 0
+        counters.framesDecoded += 1
+        recordFirstTickIfNeeded()
+        if !batch.isEmpty { emit(.decodedBatch(batch)) }
+        return nil
+    }
+
+    private func outboundLoop(socket: any EchoSocketConnection, id: UUID) async -> WebSocketTransportFailure? {
+        while isCurrent(id) {
+            do {
+                if outboundSuspended {
+                    try await sleep(250_000_000)
+                    continue
+                }
+                let snapshot = generator.makeSnapshot(emittedAtEpoch: Date().timeIntervalSince1970)
+                let data = try jsonEncoder.encode(snapshot)
+                guard let text = String(data: data, encoding: .utf8) else { return .decodingFailed }
+                try await withSocketDeadline(socket: socket, nanoseconds: healthPolicy.sendTimeoutNanoseconds, sleep: sleep) {
+                    try await socket.send(.string(text))
+                }
+                try await sleep(outboundIntervalNanoseconds)
+            } catch {
+                guard isCurrent(id) else { return nil }
+                return failure(from: error, timeout: .sendTimedOut)
+            }
+        }
+        return nil
+    }
+
+    private func heartbeatLoop(socket: any EchoSocketConnection, id: UUID) async -> WebSocketTransportFailure? {
+        while isCurrent(id) {
+            do {
+                try await sleep(healthPolicy.heartbeatIntervalNanoseconds)
+                guard isCurrent(id) else { return nil }
+                if outboundSuspended { continue }
+                try await withSocketDeadline(socket: socket, nanoseconds: healthPolicy.pongTimeoutNanoseconds, sleep: sleep) {
+                    try await socket.ping()
                 }
             } catch {
-                logger?.error("Receive failed \(error.localizedDescription)")
-                requestTransportHalt(with: .closedUnexpectedly)
+                guard isCurrent(id) else { return nil }
+                logger?.debug("WebSocket heartbeat failed \(error.localizedDescription)")
+                return failure(from: error, timeout: .heartbeatTimedOut)
             }
         }
+        return nil
     }
 
-    private func decodePayload(from data: Data) async {
-        do {
-            let payload = try jsonDecoder.decode(EchoStockPayload.self, from: data)
-            emit(.decodedTick(payload))
-        } catch {
-            requestTransportHalt(with: .decodingFailed)
-        }
-    }
-
-    private func outboundLoop() async {
-        while !Task.isCancelled {
-            guard shouldContinueIOPumps() else {
-                break
+    /// Ping/pong proves the socket is alive, not that data flows. If a whole window passes with no decoded frame
+    /// the link is replaced. Windows that overlap a background suspension are forgiven once.
+    private func staleDataWatchdog(id: UUID) async -> WebSocketTransportFailure? {
+        var lastSeen = counters.framesDecoded
+        while isCurrent(id) {
+            do {
+                try await sleep(healthPolicy.staleDataTimeoutNanoseconds)
+            } catch {
+                guard isCurrent(id) else { return nil }
+                return .closedUnexpectedly
             }
-
-            if outboundSuspended {
-                try? await Task.sleep(nanoseconds: 250_000_000)
+            guard isCurrent(id) else { return nil }
+            if outboundSuspended || suspensionObservedSinceWatchdogCheck {
+                suspensionObservedSinceWatchdogCheck = false
+                lastSeen = counters.framesDecoded
                 continue
             }
-
-            guard let socketTask else {
-                linkState = .broken
-                break
+            if counters.framesDecoded == lastSeen {
+                counters.staleDataReconnects += 1
+                transportMetrics?.onStaleData?()
+                logger?.debug("No data for the stale-data window; replacing the connection")
+                return .staleData
             }
+            lastSeen = counters.framesDecoded
+        }
+        return nil
+    }
 
-            let payload = makeSyntheticPayload()
+    // MARK: Failure classification
 
-            do {
-                let data = try jsonEncoder.encode(payload)
-                guard let text = String(data: data, encoding: .utf8) else {
-                    requestTransportHalt(with: .decodingFailed)
-                    break
-                }
+    private func failure(from error: Error, timeout: WebSocketTransportFailure) -> WebSocketTransportFailure {
+        if let close = error as? WebSocketClose {
+            reportServerClose(close)
+            return .closedByServer(code: close.code)
+        }
+        if let error = error as? URLError, error.code == .timedOut { return timeout }
+        return .closedUnexpectedly
+    }
 
-                try await socketTask.send(.string(text))
-            } catch {
-                logger?.error("Send failed \(error.localizedDescription)")
-                requestTransportHalt(with: .closedUnexpectedly)
-                break
-            }
+    private func reportServerClose(_ close: WebSocketClose) {
+        guard run?.reportedServerClose == false else { return }
+        run?.reportedServerClose = true
+        emit(.serverClosed(code: close.code, reason: close.reason.flatMap { String(data: $0, encoding: .utf8) }))
+    }
 
-            try? await Task.sleep(nanoseconds: outboundIntervalNanoseconds)
+    private func isTerminal(_ failure: WebSocketTransportFailure) -> Bool {
+        switch failure {
+        case .decodingFailed: return true
+        case let .closedByServer(code): return !WebSocketClose(code: code, reason: nil).shouldRetry
+        default: return false
         }
     }
 
-    private func makeSyntheticPayload() -> EchoStockPayload {
-        guard let symbol = symbols.randomElement() else {
-            let fallbackSymbol = "UNK"
-            let price = Double.random(in: 50...900)
-            lastTradePrices[fallbackSymbol] = price
-            referenceClosePrices[fallbackSymbol] = price * Double.random(in: 0.94...1.02)
-            let prev = referenceClosePrices[fallbackSymbol] ?? price
-            return EchoStockPayload(symbol: fallbackSymbol, price: price, previousClose: prev, emittedAtEpoch: Date().timeIntervalSince1970)
-        }
-
-        let priorPrice = lastTradePrices[symbol] ?? Double.random(in: 55...920)
-        let delta = Double.random(in: -6 ... 6)
-        let price = max(1.5, priorPrice + delta)
-        lastTradePrices[symbol] = price
-
-        if referenceClosePrices[symbol] == nil {
-            referenceClosePrices[symbol] = priorPrice * Double.random(in: 0.985...1.015)
-        }
-
-        let previousClose = referenceClosePrices[symbol] ?? priorPrice
-        return EchoStockPayload(symbol: symbol, price: price, previousClose: previousClose, emittedAtEpoch: Date().timeIntervalSince1970)
+    private func finishIfTerminal(_ failure: WebSocketTransportFailure?) -> Bool {
+        guard let failure, isTerminal(failure) else { return false }
+        emitTerminal(failure)
+        return true
     }
-}
 
-private enum TransportWorkIntent: Equatable {
-    case streaming
-    case userStopped
-}
-
-private enum TransportLinkState: Equatable {
-    case inactive
-    case active
-    case broken
-}
-
-private enum HandshakeSessionOutcome: Equatable {
-    case handshook
-    case handshakeFailed
-    case abortedBecauseUserStopped
-}
-
-private enum URLSessionCompletionExpectation: Equatable {
-    case surfaceToDriver
-    case ignoreNextForScheduledReconnect
+    private func emitTerminal(_ failure: WebSocketTransportFailure) {
+        transportMetrics?.onTerminalTransportFailure?(failure)
+        emit(.transportFailure(failure))
+    }
 }

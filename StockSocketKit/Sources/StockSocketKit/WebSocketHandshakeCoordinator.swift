@@ -8,21 +8,46 @@
 import Foundation
 import Synchronization
 
-internal final class WebSocketHandshakeAwaiter: @unchecked Sendable {
+internal final class WebSocketHandshakeAwaiter: Sendable {
     private struct LockedState {
         var result: Result<Void, Error>?
         var waiters: [CheckedContinuation<Result<Void, Error>, Never>] = []
     }
 
-    private let mutex = Mutex(LockedState())
+    private let state = Mutex(LockedState())
 
     func waitHandshakeResult() async -> Result<Void, Error> {
+        await withTaskCancellationHandler {
+            await registerWaiter()
+        } onCancel: {
+            self.completeFailure(CancellationError())
+        }
+    }
+
+    func waitHandshakeResult(timeoutNanoseconds: UInt64) async -> Result<Void, Error> {
+        await withTaskGroup(of: Result<Void, Error>.self) { group in
+            group.addTask { await self.waitHandshakeResult() }
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    return .failure(URLError(.timedOut))
+                } catch {
+                    return .failure(error)
+                }
+            }
+            let first = await group.next() ?? .failure(CancellationError())
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private func registerWaiter() async -> Result<Void, Error> {
         await withCheckedContinuation { continuation in
-            let immediate = mutex.withLock { state -> Result<Void, Error>? in
-                if let existing = state.result {
+            let immediate = state.withLock { locked -> Result<Void, Error>? in
+                if let existing = locked.result {
                     return existing
                 }
-                state.waiters.append(continuation)
+                locked.waiters.append(continuation)
                 return nil
             }
             if let immediate {
@@ -40,13 +65,13 @@ internal final class WebSocketHandshakeAwaiter: @unchecked Sendable {
     }
 
     private func finish(_ outcome: Result<Void, Error>) {
-        let toResume = mutex.withLock { state -> [CheckedContinuation<Result<Void, Error>, Never>] in
-            guard state.result == nil else {
+        let toResume = state.withLock { locked -> [CheckedContinuation<Result<Void, Error>, Never>] in
+            guard locked.result == nil else {
                 return []
             }
-            state.result = outcome
-            let copied = state.waiters
-            state.waiters.removeAll()
+            locked.result = outcome
+            let copied = locked.waiters
+            locked.waiters.removeAll()
             return copied
         }
         for waiter in toResume {
@@ -60,16 +85,16 @@ internal final class EchoWebSocketURLSessionDelegate:
     URLSessionDelegate,
     URLSessionWebSocketDelegate,
     URLSessionTaskDelegate,
-    @unchecked Sendable {
+    Sendable {
     private let handshake: WebSocketHandshakeAwaiter
-    private weak var owner: EchoWebSocketSession?
     private let tlsHooks: EchoTLSHooks?
-    private var reportedOpen = false
+    private let closeState: WebSocketCloseState
+    private let reportedOpen = Mutex(false)
 
-    init(handshake: WebSocketHandshakeAwaiter, owner: EchoWebSocketSession, tlsHooks: EchoTLSHooks?) {
+    init(handshake: WebSocketHandshakeAwaiter, tlsHooks: EchoTLSHooks?, closeState: WebSocketCloseState) {
         self.handshake = handshake
-        self.owner = owner
         self.tlsHooks = tlsHooks
+        self.closeState = closeState
     }
 
     func urlSession(
@@ -85,15 +110,24 @@ internal final class EchoWebSocketURLSessionDelegate:
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        reportedOpen = true
+        reportedOpen.withLock { $0 = true }
         handshake.completeSuccess()
     }
 
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        let close = WebSocketClose(code: closeCode.rawValue, reason: reason)
+        closeState.record(close)
+        if !reportedOpen.withLock({ $0 }) { handshake.completeFailure(close) }
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if reportedOpen == false {
+        if !reportedOpen.withLock({ $0 }) {
             handshake.completeFailure(error ?? URLError(.cannotConnectToHost))
-        } else {
-            owner?.urlSessionTaskDidComplete(error: error)
         }
     }
 }

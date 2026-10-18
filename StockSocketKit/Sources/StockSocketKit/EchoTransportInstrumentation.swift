@@ -26,7 +26,7 @@ public struct EchoTLSHooks: @unchecked Sendable {
     }
 }
 
-/// Optional instrumentation hooks placed on the websocket driver (handshake timing, backoff, teardown).
+/// Optional instrumentation hooks placed on the websocket driver (handshake timing, backoff, teardown, loss).
 public struct EchoTransportMetrics: Sendable {
     public var onReconnectSleep: (@Sendable (_ attemptCounter: Int, _ delayNanos: UInt64) -> Void)?
 
@@ -34,13 +34,33 @@ public struct EchoTransportMetrics: Sendable {
 
     public var onTerminalTransportFailure: (@Sendable (WebSocketTransportFailure) -> Void)?
 
+    /// An undecodable frame was discarded.
+    public var onFrameDropped: (@Sendable () -> Void)?
+
+    /// The consumer's stream buffer was full and an event was discarded.
+    public var onEventDropped: (@Sendable (WebSocketPublicEvent) -> Void)?
+
+    /// The link stayed silent past the stale-data window and is being replaced.
+    public var onStaleData: (@Sendable () -> Void)?
+
+    /// Milliseconds from starting a connection attempt to the first decoded frame on it.
+    public var onTimeToFirstTick: (@Sendable (_ milliseconds: Int) -> Void)?
+
     public init(
         onReconnectSleep: (@Sendable (Int, UInt64) -> Void)? = nil,
         onHandshakeCompleted: (@Sendable (Bool) -> Void)? = nil,
-        onTerminalTransportFailure: (@Sendable (WebSocketTransportFailure) -> Void)? = nil
+        onTerminalTransportFailure: (@Sendable (WebSocketTransportFailure) -> Void)? = nil,
+        onFrameDropped: (@Sendable () -> Void)? = nil,
+        onEventDropped: (@Sendable (WebSocketPublicEvent) -> Void)? = nil,
+        onStaleData: (@Sendable () -> Void)? = nil,
+        onTimeToFirstTick: (@Sendable (Int) -> Void)? = nil
     ) {
         self.onReconnectSleep = onReconnectSleep
         self.onHandshakeCompleted = onHandshakeCompleted
         self.onTerminalTransportFailure = onTerminalTransportFailure
+        self.onFrameDropped = onFrameDropped
+        self.onEventDropped = onEventDropped
+        self.onStaleData = onStaleData
+        self.onTimeToFirstTick = onTimeToFirstTick
     }
 }
